@@ -676,8 +676,6 @@ pixelColor_t brightnessAbsolute(pixelColor_t pixelColor, int maximum)
   newPixel.g = regularizePixel((int((float)g * ((float) myMaximum / (float)maximum))));
   newPixel.b = regularizePixel((int((float)b * ((float) myMaximum / (float)maximum))));
   newPixel.w = regularizePixel((int((float)w * ((float) myMaximum / (float)maximum))));
-
-
 }
 
 

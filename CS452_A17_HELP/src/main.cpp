@@ -1,12 +1,17 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <Wire.h>
 #include <WebServer.h>
 #include <Stepper.h>
+#include <HTTPClient.h>
 #include "ClosedCube_HDC1080.h"
 #include "PixelFunctions.h"
 #ifdef __AVR__
   #include <avr/power.h>
 #endif
+
+#define SECOND 1000 / portTICK_PERIOD_MS
+#define MINUTE 60 * SECOND
 
 #define PIN 21
 #define NUM_LEDS 4
@@ -14,6 +19,9 @@
 
 #define NUM_STEPS_PER_REV 2048
 #define STEPS 32
+
+#define DIP0 34
+// #define DIP1 39
 
 /*Put your SSID & Password*/
 //const char *ssid = "AirVandalRobot";    // Enter SSID here
@@ -51,7 +59,7 @@ enum RGBCommands
 void TaskMakeWebPage(void *pvParameters);
 void TaskMoveStepper(void *pvParameters);
 void TaskGetHumidTemp(void *pvParameters);
-void IOTServerSend(void *pvParameters);
+void TaskDriver(void *pvParameters);
 
 // function prototypes
 void handle_OnConnect();
@@ -62,18 +70,25 @@ void handle_CCWoff();
 void handle_NotFound();
 String SendHTML(uint8_t, uint8_t);
 void managePixels(int, int, int, int, RGBCommands);
+void IOTServerFunctions(IOTAPICommands, char *);
 
 // HDC semaphores and queues
 QueueHandle_t hdcQueue;
 SemaphoreHandle_t hdcSemaphore;
 // Stepper Queue
 QueueHandle_t stepperQueue;
+// IOT server Queue
+QueueHandle_t AuthCodeQueue;
 
 uint8_t CWpin = 4;
 bool CWstatus = LOW;
 
 uint8_t CCWpin = 5;
 bool CCWstatus = LOW;
+
+// temp and humid variables
+double temp = 0;
+double humid = 0;
 
 void setup()
 {
@@ -83,7 +98,7 @@ void setup()
   //delay(100);
   pinMode(CWpin, OUTPUT);
   pinMode(CCWpin, OUTPUT);
-
+  pinMode(DIP0, INPUT);
   Serial.println("Connecting to ");
   Serial.println(ssid);
   WiFi.mode(WIFI_MODE_STA);
@@ -123,29 +138,74 @@ void setup()
   server.begin();
   //server.handleClient();
 
+  AuthCodeQueue = xQueueCreate(1, sizeof(String));
   stepperQueue = xQueueCreate(1, sizeof(int)); // stepper queue take one arg for stepper dir
   hdcQueue = xQueueCreate(2, sizeof(int)); // size 2 for temp/humid
   hdcSemaphore = xSemaphoreCreateBinary();
+  xSemaphoreGive(hdcSemaphore);
+
+
   xTaskCreatePinnedToCore(TaskMakeWebPage, "WebPage", 2048, NULL, configMAX_PRIORITIES - 1, NULL, 1);
-  xTaskCreatePinnedToCore(TaskMoveStepper, "Stepper", 2048, NULL, configMAX_PRIORITIES - 2, NULL, 1);
-  xTaskCreatePinnedToCore(TaskGetHumidTemp, "Temp/Humid Sensor", 1026, NULL, configMAX_PRIORITIES -2, NULL, 1);
+  xTaskCreatePinnedToCore(TaskMoveStepper, "Stepper", 2048, NULL, configMAX_PRIORITIES - 3, NULL, 1);
+  xTaskCreatePinnedToCore(TaskGetHumidTemp, "Temp/Humid Sensor", 1024, NULL, configMAX_PRIORITIES - 3, NULL, 1);
+  xTaskCreatePinnedToCore(TaskDriver, "Main Driver", 1024, NULL, configMAX_PRIORITIES - 2, NULL, 1);
 }
 void loop()
 { 
 }
 
+void TaskDriver(void *pvParameters)
+{
+  (void) pvParameters;
+  char auth_code[30];
+  int i = 1, j = 0;
+  RGBCommands command = still;
+  String response;
+  //Serial.println("Here");
+  if(digitalRead(DIP0) == HIGH)
+  {
+    //Serial.println("HIGH");
+    vTaskDelay(portMAX_DELAY);
+  }
+  else
+  {
+    for(;;)
+    {
+      xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
+      IOTServerFunctions(login, auth_code);
+      xQueueReceive(AuthCodeQueue, &response, portMAX_DELAY);
+  
+      while(response[i] != ':') i++;
+      i+=2;
+      while(response[i] != '\"')
+      {
+        auth_code[j] = response[i];
+        i++;
+        j++;
+      }
+      auth_code[j] = '\0';
+      Serial.print("auth code: ");
+      Serial.println(auth_code);
+      Serial.println("Here");
+      vTaskDelay(MINUTE * 5);
+        managePixels(0, 0, 0, 255, command);
+        IOTServerFunctions(data, auth_code);
+        managePixels(0, 0, 0, 0, command);
+    }
+  }
+}
+
 void TaskMakeWebPage(void *pvParameters)
 {
   (void) pvParameters;
-  double temp;
-  double humid;
+  temp = 0;
+  humid = 0;
   int direction = 0;
   RGBCommands command = still;
-  //SendHTML(0, 0);
   for(;;)
   {
     server.handleClient();
-    if(CWstatus != 1 && CCWstatus != 1) // Get temp and humid
+    if(CWstatus != 1 && CCWstatus != 1 && digitalRead(DIP0) == HIGH) // Get temp and humid
     {
       managePixels(255, 0, 0, 0, command);
       xSemaphoreGive(hdcSemaphore);
@@ -153,28 +213,28 @@ void TaskMakeWebPage(void *pvParameters)
       xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
       xQueueReceive(hdcQueue, &temp, 0);
       xQueueReceive(hdcQueue, &humid, 0);
+      vTaskDelay(SECOND);
       managePixels(0, 0, 0, 0, command);
     }
-    if(CWstatus == 1 && CCWstatus != 1) // CCW
+    if(CWstatus == 1 && CCWstatus != 1 && digitalRead(DIP0) == HIGH) // CCW
     {
       managePixels(0, 255, 0, 0, command);
       direction = -1;
       xQueueSend(stepperQueue, &direction, portMAX_DELAY);
       managePixels(0, 0, 0, 0, command);
     }
-    if(CWstatus != 1 && CCWstatus == 1) // CW
+    if(CWstatus != 1 && CCWstatus == 1 && digitalRead(DIP0) == HIGH) // CW
     {
       managePixels(0, 0, 255, 0, command);
       direction = 1;
       xQueueSend(stepperQueue, &direction, portMAX_DELAY);
       managePixels(0, 0, 0, 0, command);
     }
-    if(CWstatus == 1 && CCWstatus == 1)
+    if(CWstatus == 1 && CCWstatus == 1 && digitalRead(DIP0) == HIGH) // rainbow
     {
-      //direction = 0;
-      //xQueueSend(stepperQueue, &direction, portMAX_DELAY);
+      managePixels(0, 0, 0, 0, rainbw);
     }
-    
+    taskYIELD();
   }
 }
 
@@ -183,7 +243,7 @@ void handle_OnConnect()
 {
   CWstatus = LOW;
   CCWstatus = LOW;
-  Serial.println("GPIO4 Status: OFF | GPIO5 Status: OFF");
+  Serial.println("CW Status: OFF | CCW Status: OFF");
   server.send(200, "text/html", SendHTML(CWstatus, CCWstatus));
 }
 
@@ -292,13 +352,15 @@ void TaskMoveStepper(void *pvParameters)
 void TaskGetHumidTemp(void *pvParameters)
 {
   (void) pvParameters;
-  double humid;
-  double temp;
+  humid = 0;
+  temp = 0;
   for(;;)
   {
     xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
     temp = hdc1080.readTemperature();
+    Serial.print("temp: ");
     Serial.println(temp);
+    Serial.print("humid: ");
     humid = hdc1080.readHumidity();
     Serial.println(humid);
     if(!xQueueSend(hdcQueue, &temp, portMAX_DELAY))
@@ -310,7 +372,7 @@ void TaskGetHumidTemp(void *pvParameters)
       Serial.println("Error Sending Humidity");
     }
     xSemaphoreGive(hdcSemaphore);
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    vTaskDelay(SECOND);
   }
 }
 
@@ -331,5 +393,85 @@ void managePixels(int r, int g, int b, int w, RGBCommands command)
     case rainbw:
       rainbow(pStrand, 0, 2000);
       break;
+  }
+}
+
+void IOTServerFunctions(IOTAPICommands command, char *auth_code)
+{
+  Serial.println("IOT FUNCTION");
+  HTTPClient http;
+  int httpResponseCode;
+  String response;
+  String value, temp_str;
+  if(WiFi.status() == WL_CONNECTED)
+  {
+    switch(command)
+    {
+      case ping:
+        http.begin(detectServer);
+        http.addHeader("Content-Type", "application/json");
+        httpResponseCode = http.POST("{\"key\": \"2436e8c114aa64ee\"}");
+        response = http.getString();
+        Serial.print("HTTP Response code: ");
+        Serial.println(httpResponseCode);
+        Serial.println(response);
+        http.end();
+        if(httpResponseCode == -11)
+        {
+          IOTServerFunctions(ping, auth_code);
+        }
+        break;
+      case login:
+        http.begin(registerServer);
+        http.addHeader("Content-Type", "application/json");
+        httpResponseCode = http.POST("{\"key\": \"2436e8c114aa64ee\", \"iotid\": 1013}");
+        response = http.getString();
+        Serial.print("HTTP Response code: ");
+        Serial.println(httpResponseCode);
+        Serial.println(response);
+        http.end();
+        if(!xQueueSend(AuthCodeQueue, &response, portMAX_DELAY))
+        {
+          Serial.println("Error Sending AC to IOT Server");
+        }
+        if(httpResponseCode == -11)
+        {
+          IOTServerFunctions(login, auth_code);
+        }
+        break;
+      case query:
+        break;
+      case data:
+        xSemaphoreGive(hdcSemaphore);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
+        xQueueReceive(hdcQueue, &temp, 1);
+        xQueueReceive(hdcQueue, &humid, 1);
+        value = "{\"auth_code\": \"";
+        value += auth_code;
+        temp_str = "\", \"temperature\": ";
+        value += temp_str;
+        temp_str = temp;
+        value += temp_str;
+        temp_str = ", \"humidity\": ";
+        value += temp_str;
+        temp_str = humid;
+        value += temp_str;
+        temp_str = ", \"light\": 1.2345, \"time\": \"2008-01-01 00:00:01\" }";
+        value += temp_str;
+        http.begin(dataServer);
+        http.addHeader("Content-Type", "application/json");
+        httpResponseCode = http.POST(value);
+        response = http.getString();
+        Serial.print("HTTP Response code: ");
+        Serial.println(httpResponseCode);
+        Serial.println(response);
+        http.end();
+        break;
+      case shutdown:
+        break;
+      default: 
+        break;
+    }
   }
 }
