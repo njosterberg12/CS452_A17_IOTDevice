@@ -24,10 +24,10 @@
 // #define DIP1 39
 
 /*Put your SSID & Password*/
-const char *ssid = "AirVandalRobot";    // Enter SSID here
-const char *password = "R0b0tsb3Fr33!"; //Enter Password here
-//const char *ssid = "MySpectrumWiFid8-2G";
-//const char *password = "pinkbubble433";
+//const char *ssid = "AirVandalRobot";    // Enter SSID here
+//const char *password = "R0b0tsb3Fr33!"; //Enter Password here
+const char *ssid = "MySpectrumWiFid8-2G";
+const char *password = "pinkbubble433";
 
 WebServer server(80);
 const char* detectServer = "http://13.83.132.121:5000//IOTAPI/DetectServer";
@@ -161,37 +161,18 @@ void TaskDriver(void *pvParameters)
   int i = 1, j = 0;
   RGBCommands command = still;
   String response;
-  //Serial.println("Here");
   if(digitalRead(DIP0) == HIGH)
   {
-    //Serial.println("HIGH");
     vTaskDelay(portMAX_DELAY);
   }
   else
   {
     for(;;)
     {
-      //xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
-      //IOTServerFunctions(login, auth_code);
-      //xQueueReceive(AuthCodeQueue, &response, portMAX_DELAY);
-  
-      /*while(response[i] != ':') i++;
-      i+=2;
-      while(response[i] != '\"')
-      {
-        auth_code[j] = response[i];
-        i++;
-        j++;
-      }
-      auth_code[j] = '\0';
-      Serial.print("auth code: ");
-      Serial.println(auth_code);
-      Serial.println("Here");*/
-      //vTaskDelay(MINUTE * 5);
-        vTaskDelay(SECOND * 10);
-        managePixels(0, 0, 0, 255, command);
-        IOTServerFunctions(data, "99ec7f83c9f844a8");
-        managePixels(0, 0, 0, 0, command);
+      vTaskDelay(MINUTE * 5);
+      managePixels(0, 0, 0, 255, command);
+      IOTServerFunctions(data, "99ec7f83c9f844a8");
+      managePixels(0, 0, 0, 0, command);
     }
   }
 }
@@ -399,7 +380,6 @@ void managePixels(int r, int g, int b, int w, RGBCommands command)
 
 void IOTServerFunctions(IOTAPICommands command, char *auth_code)
 {
-  Serial.println("IOT FUNCTION");
   HTTPClient http;
   int httpResponseCode;
   String response;
@@ -446,11 +426,11 @@ void IOTServerFunctions(IOTAPICommands command, char *auth_code)
         xSemaphoreGive(hdcSemaphore);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
         xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
-        if(xQueueReceive(hdcQueue, &temp, 1))
+        if(!xQueueReceive(hdcQueue, &temp, 1))
         {
           Serial.println("hdc Queue Not returning temp.");
         }
-        if(xQueueReceive(hdcQueue, &humid, 1))
+        if(!xQueueReceive(hdcQueue, &humid, 1))
         {
           Serial.println("hdc Queue not returning humidity.");
         }
@@ -467,46 +447,20 @@ void IOTServerFunctions(IOTAPICommands command, char *auth_code)
 
         temp_str = ", \"light\": 1.2345, \"time\": \"2008-01-01 00:00:01\" }";
         value += temp_str;
-        Serial.println("Check if here");
-        http.begin("http://13.83.132.121:5000//IOTAPI/IOTData");
-        Serial.println(">>>>>> here");
+        http.begin(dataServer);
         http.addHeader("Content-Type", "application/json");
-        //httpResponseCode = http.POST(value);
+        httpResponseCode = http.POST(value);
 
-        String First = "{\"auth_code\": \"99ec7f83c9f844a8\", \"temperature\": }";
-        String Temp = (String)"12" + ", ";
-        String Humidity = "\"humidity\": " + (String)"2" + ", ";
-        String End = "\"light\": 1.2345, \"time\": \"2008-01-01 00:00:01\"}";
-        String sendPost = First + Temp + Humidity + End;
-        Serial.println(sendPost);
-        //String fromMary = '{"auth_code": "84091c27db5d842f", "temperature": 77.8, "humidity": 39.4, "light": 1.2345, "time": "2008-01-01 00:00:01" }';
-        //httpResponseCode = http.POST(fromMary);
-        httpResponseCode = http.POST(sendPost);
-        Serial.println(">>>>>>>>>>>>>>>>>>>>>>>");
-        Serial.println(httpResponseCode);
         response = http.getString();
         Serial.print("HTTP Response code: ");
         Serial.println(httpResponseCode);
-        if(httpResponseCode>0){
- 
-          String response = http.getString();                       //Get the respons$
-      
-          Serial.println(httpResponseCode);   //Print return code
-          Serial.println(response);           //Print request answer
-      
-        }else{
-      
-          Serial.print("Error on sending POST: ");
-          Serial.println(httpResponseCode);
-      
-        }
         Serial.println(response);
         http.end();
         break;
-      //case shutdown:
-        //break;
-      //default: 
-        //break;
+      case shutdown:
+        break;
+      default: 
+        break;
     }
   }
 }
