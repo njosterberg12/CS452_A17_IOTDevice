@@ -24,10 +24,10 @@
 // #define DIP1 39
 
 /*Put your SSID & Password*/
-//const char *ssid = "AirVandalRobot";    // Enter SSID here
-//const char *password = "R0b0tsb3Fr33!"; //Enter Password here
-const char *ssid = "MySpectrumWiFid8-2G";
-const char *password = "pinkbubble433";
+const char *ssid = "AirVandalRobot";    // Enter SSID here
+const char *password = "R0b0tsb3Fr33!"; //Enter Password here
+//const char *ssid = "MySpectrumWiFid8-2G";
+//const char *password = "pinkbubble433";
 
 WebServer server(80);
 const char* detectServer = "http://13.83.132.121:5000//IOTAPI/DetectServer";
@@ -142,13 +142,13 @@ void setup()
   stepperQueue = xQueueCreate(1, sizeof(int)); // stepper queue take one arg for stepper dir
   hdcQueue = xQueueCreate(2, sizeof(int)); // size 2 for temp/humid
   hdcSemaphore = xSemaphoreCreateBinary();
-  xSemaphoreGive(hdcSemaphore);
-
+  //xSemaphoreGive(hdcSemaphore);
 
   xTaskCreatePinnedToCore(TaskMakeWebPage, "WebPage", 2048, NULL, configMAX_PRIORITIES - 1, NULL, 1);
   xTaskCreatePinnedToCore(TaskMoveStepper, "Stepper", 2048, NULL, configMAX_PRIORITIES - 3, NULL, 1);
   xTaskCreatePinnedToCore(TaskGetHumidTemp, "Temp/Humid Sensor", 1024, NULL, configMAX_PRIORITIES - 3, NULL, 1);
-  xTaskCreatePinnedToCore(TaskDriver, "Main Driver", 1024, NULL, configMAX_PRIORITIES - 2, NULL, 1);
+  xTaskCreatePinnedToCore(TaskDriver, "Main Driver", 3000, NULL, configMAX_PRIORITIES - 2, NULL, 1);
+  //xTaskCreatePinnedToCore(TaskAuthorize, "AC_code"), 1024, NULL, configMAX_PRIORITIES, NULL, 1);
 }
 void loop()
 { 
@@ -157,7 +157,7 @@ void loop()
 void TaskDriver(void *pvParameters)
 {
   (void) pvParameters;
-  char auth_code[30];
+  char auth_code[30] = "99ec7f83c9f844a8";
   int i = 1, j = 0;
   RGBCommands command = still;
   String response;
@@ -171,11 +171,11 @@ void TaskDriver(void *pvParameters)
   {
     for(;;)
     {
-      xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
-      IOTServerFunctions(login, auth_code);
-      xQueueReceive(AuthCodeQueue, &response, portMAX_DELAY);
+      //xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
+      //IOTServerFunctions(login, auth_code);
+      //xQueueReceive(AuthCodeQueue, &response, portMAX_DELAY);
   
-      while(response[i] != ':') i++;
+      /*while(response[i] != ':') i++;
       i+=2;
       while(response[i] != '\"')
       {
@@ -186,10 +186,11 @@ void TaskDriver(void *pvParameters)
       auth_code[j] = '\0';
       Serial.print("auth code: ");
       Serial.println(auth_code);
-      Serial.println("Here");
-      vTaskDelay(MINUTE * 5);
+      Serial.println("Here");*/
+      //vTaskDelay(MINUTE * 5);
+        vTaskDelay(SECOND * 10);
         managePixels(0, 0, 0, 255, command);
-        IOTServerFunctions(data, auth_code);
+        IOTServerFunctions(data, "99ec7f83c9f844a8");
         managePixels(0, 0, 0, 0, command);
     }
   }
@@ -372,7 +373,7 @@ void TaskGetHumidTemp(void *pvParameters)
       Serial.println("Error Sending Humidity");
     }
     xSemaphoreGive(hdcSemaphore);
-    vTaskDelay(SECOND);
+    vTaskDelay(SECOND * 10);
   }
 }
 
@@ -445,10 +446,16 @@ void IOTServerFunctions(IOTAPICommands command, char *auth_code)
         xSemaphoreGive(hdcSemaphore);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
         xSemaphoreTake(hdcSemaphore, portMAX_DELAY);
-        xQueueReceive(hdcQueue, &temp, 1);
-        xQueueReceive(hdcQueue, &humid, 1);
+        if(xQueueReceive(hdcQueue, &temp, 1))
+        {
+          Serial.println("hdc Queue Not returning temp.");
+        }
+        if(xQueueReceive(hdcQueue, &humid, 1))
+        {
+          Serial.println("hdc Queue not returning humidity.");
+        }
         value = "{\"auth_code\": \"";
-        value += auth_code;
+        value += "99ec7f83c9f844a8";
         temp_str = "\", \"temperature\": ";
         value += temp_str;
         temp_str = temp;
@@ -457,21 +464,49 @@ void IOTServerFunctions(IOTAPICommands command, char *auth_code)
         value += temp_str;
         temp_str = humid;
         value += temp_str;
+
         temp_str = ", \"light\": 1.2345, \"time\": \"2008-01-01 00:00:01\" }";
         value += temp_str;
-        http.begin(dataServer);
+        Serial.println("Check if here");
+        http.begin("http://13.83.132.121:5000//IOTAPI/IOTData");
+        Serial.println(">>>>>> here");
         http.addHeader("Content-Type", "application/json");
-        httpResponseCode = http.POST(value);
+        //httpResponseCode = http.POST(value);
+
+        String First = "{\"auth_code\": \"99ec7f83c9f844a8\", \"temperature\": }";
+        String Temp = (String)"12" + ", ";
+        String Humidity = "\"humidity\": " + (String)"2" + ", ";
+        String End = "\"light\": 1.2345, \"time\": \"2008-01-01 00:00:01\"}";
+        String sendPost = First + Temp + Humidity + End;
+        Serial.println(sendPost);
+        //String fromMary = '{"auth_code": "84091c27db5d842f", "temperature": 77.8, "humidity": 39.4, "light": 1.2345, "time": "2008-01-01 00:00:01" }';
+        //httpResponseCode = http.POST(fromMary);
+        httpResponseCode = http.POST(sendPost);
+        Serial.println(">>>>>>>>>>>>>>>>>>>>>>>");
+        Serial.println(httpResponseCode);
         response = http.getString();
         Serial.print("HTTP Response code: ");
         Serial.println(httpResponseCode);
+        if(httpResponseCode>0){
+ 
+          String response = http.getString();                       //Get the respons$
+      
+          Serial.println(httpResponseCode);   //Print return code
+          Serial.println(response);           //Print request answer
+      
+        }else{
+      
+          Serial.print("Error on sending POST: ");
+          Serial.println(httpResponseCode);
+      
+        }
         Serial.println(response);
         http.end();
         break;
-      case shutdown:
-        break;
-      default: 
-        break;
+      //case shutdown:
+        //break;
+      //default: 
+        //break;
     }
   }
 }
